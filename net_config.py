@@ -1,4 +1,3 @@
-from telnetlib import Telnet
 import socket
 import netmiko
 import script_messages
@@ -13,7 +12,7 @@ SWITCH = []
 def is_number(num):
     """
     Simple logic to check if a string can be cast to int
-    :param num: value
+    :param num: string value
     :return: boolean
     """
     try:
@@ -23,9 +22,22 @@ def is_number(num):
         return False
 
 
-def telnet_open_console(host, port):
-    with Telnet(host, port) as tn:
-        tn.interact()
+def write_to_file(output):
+    """
+    Ask the user if he wants to save the output to a file
+    :param output: output from a command
+    :return: 0 for success
+    """
+    print(script_messages.ASK_SAVE_OUTPUT_TO_FILE)
+    answer = script_messages.ask_yes_or_not()
+    if answer == 'y':
+        destination_file = input(script_messages.ASK_FILE_NAME) + '.txt'
+        try:
+            with open(destination_file, 'w') as output_file:
+                output_file.write(output)
+        except Exception as error:
+            print(error)
+    return 0
 
 
 def netmiko_connect(device_info):
@@ -58,8 +70,8 @@ def add_device(auto_add=False):
         if 'IOU' in devices_auto_config:
             for device_auto_details in devices_auto_config['IOU']:
                 device_port = int(devices_auto_config['IOU'][device_auto_details])
-                status_code = device_connect_append(1, {'device_type': devices_type,
-                                                        'host': device_ip,
+                status_code = device_connect_append(1, {'device_type': device_type,
+                                                        'host': devices_ip,
                                                         'port': device_port})
                 if status_code == 1:
                     try_again = 'y'
@@ -73,7 +85,10 @@ def add_device(auto_add=False):
 
         if "SWITCH" in devices_auto_config:
             for device_auto_details in devices_auto_config['SWITCH']:
-                status_code = device_connect_append(2, devices_auto_config['SWITCH'][device_auto_details])
+                device_port = int(devices_auto_config['SWITCH'][device_auto_details])
+                status_code = device_connect_append(2, {'device_type': device_type,
+                                                        'host': devices_ip,
+                                                        'port': device_port})
                 if status_code == 1:
                     try_again = 'y'
                     while try_again == 'y':
@@ -146,35 +161,228 @@ def device_connect_append(device_type, device_details):
     return 0
 
 
-def show_interface_running_conf(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
+def show_interfaces(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
     """
+    Show interface configurations
     :param device: Device connection object
+    :return: 0 for success
     """
     output = device.send_command('sh ip int br')
     print(output)
+    write_to_file(output)
+    return 0
+
+
+def show_ip_routing_table(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
+    """
+    Show current ip routing table
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    output = device.send_command('sh ip route')
+    print(output)
+    write_to_file(output)
+    return 0
+
+
+def show_vlan(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
+    """
+    Show configured vlan's
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    output = device.send_command('show vlan')
+    print(output)
+    write_to_file(output)
+    return 0
+
+
+def show_mac_table(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
+    """
+    Show mac address table
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    output = device.send_command('show mac address-table')
+    print(output)
+    write_to_file(output)
+    return 0
+
+
+def create_vlan(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
+    """
+    Create a new vlan on the switch
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    print(script_messages.ConfigureVlanStrings.ASK_SHOW_VLAN)
+    answer = script_messages.ask_yes_or_not()
+    if answer == 'y':
+        show_vlan(device)
+
+    vlan_number = input(script_messages.GeneralConfiguration.ASK_VLAN_NUMBER)
+    while not is_number(vlan_number):
+        print(script_messages.VALUE_NOT_A_NUMBER)
+        vlan_number = input(script_messages.GeneralConfiguration.ASK_VLAN_NUMBER)
+    selected_vlan = 'vlan {0}'.format(vlan_number)
+
+    vlan_name = input(script_messages.ConfigureVlanStrings.ASK_VLAN_NAME)
+    vlan_naming = 'name {0}'.format(vlan_name)
+
+    commands_set = [selected_vlan,
+                    vlan_naming,
+                    'state active',
+                    'no shutdown']
+    device.send_config_set(commands_set)
+    return 0
 
 
 def configure_vlan(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
-    pass
+    """
+    Configure vlan for selected interface
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    print(script_messages.ConfigureVlanStrings.ASK_SHOW_VLAN)
+    answer = script_messages.ask_yes_or_not()
+    if answer == 'y':
+        show_vlan(device)
+    selected_interface = input(script_messages.GeneralConfiguration.ASK_INTERFACE)
+    selected_interface = 'int {0}'.format(selected_interface)
+
+    # Ask the user if he wants to config a trunk, if not, just config a vlan for the interface
+    print(script_messages.ConfigureVlanStrings.ASK_CONFIG_TRUNK)
+    config_trunk = script_messages.ask_yes_or_not()
+    if config_trunk == 'y':
+        # Config a trunk
+        commands_set = [selected_interface,
+                        'switchport trunk encapsulation dot1q',
+                        'switchport mode trunk',
+                        'exit']
+        device.send_config_set(commands_set)
+        return 0
+    else:
+        # Config a vlan for the interface
+        vlan_number = input(script_messages.GeneralConfiguration.ASK_VLAN_NUMBER)
+        while not is_number(vlan_number):
+            print(script_messages.VALUE_NOT_A_NUMBER)
+            vlan_number = input(script_messages.GeneralConfiguration.ASK_VLAN_NUMBER)
+        vlan_command = "switchport access vlan {0}".format(vlan_number)
+        command_set = [selected_interface,
+                       vlan_command,
+                       'exit']
+        device.send_config_set(command_set)
+        return 0
 
 
 def configure_ospf(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
-    pass
+    """
+    Configure router ospf for the selected device
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    # Ask for the ospf process id
+    ospf_process_id = input(script_messages.ConfigureOspfStrings.ASK_PROCESS_ID)
+    while not is_number(ospf_process_id):
+        print(script_messages.VALUE_NOT_A_NUMBER)
+        ospf_process_id = input(script_messages.ConfigureOspfStrings.ASK_PROCESS_ID)
+    ospf_process_id = "router ospf {0}".format(ospf_process_id)
+
+    # Ask for the network arguments
+    mask_ip_address = input(script_messages.ConfigureOspfStrings.ASK_MASK_IP_ADDRESS)
+    wildcard_mask_address = input(script_messages.ConfigureOspfStrings.ASK_WILDCARD_MASK_ADDRESS)
+    area_number = input(script_messages.ConfigureOspfStrings.ASK_AREA)
+    while not is_number(area_number):
+        print(script_messages.VALUE_NOT_A_NUMBER)
+        area_number = input(script_messages.ConfigureOspfStrings.ASK_AREA)
+
+    network_command = "network {ip_address} {wildcard_mask} area {area_id}".format(ip_address=mask_ip_address,
+                                                                                   wildcard_mask=wildcard_mask_address,
+                                                                                   area_id=area_number)
+    ospf_config_commands = [ospf_process_id,
+                            network_command,
+                            'exit']
+    device.send_config_set(ospf_config_commands)
+    return 0
 
 
 def configure_interface(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
-    pass
+    """
+    Configure interface settings
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    print(script_messages.ConfigureInterfaceStrings.ASK_SHOW_INTERFACE_IP_CONFIGURATIONS)
+    answer = script_messages.ask_yes_or_not()
+    if answer == 'y':
+        show_interfaces(device)
+
+    # Ask if the user wants to configure a subinterface
+    print(script_messages.ConfigureInterfaceStrings.ASK_IS_SUBINTERFACE)
+    is_subinterface = script_messages.ask_yes_or_not()
+
+    # select interface
+    selected_interface = input(script_messages.GeneralConfiguration.ASK_INTERFACE)
+    interface_command = 'int {0}'.format(selected_interface)
+
+    # Setup the interface ip settings
+    interface_ip_address = input(script_messages.ConfigureInterfaceStrings.ASK_INTERFACE_IP)
+    interface_subnet_mask = input(script_messages.ConfigureInterfaceStrings.ASK_INTERFACE_SUBNET_MASK)
+    ip_address_command = 'ip address {ip_address} {subnet_mask}'.format(ip_address=interface_ip_address,
+                                                                        subnet_mask=interface_subnet_mask)
+
+    # If this is a subinterface, configure the encapsulation command
+    if is_subinterface == 'y':
+        vlan_number = input(script_messages.GeneralConfiguration.ASK_VLAN_NUMBER)
+        while not is_number(vlan_number):
+            print(script_messages.VALUE_NOT_A_NUMBER)
+            vlan_number = input(script_messages.GeneralConfiguration.ASK_VLAN_NUMBER)
+        encapsulation_command = 'encapsulation dot1Q {vlan_number}'.format(vlan_number=vlan_number)
+        interface_configuration_commands = [interface_command,
+                                            encapsulation_command,
+                                            ip_address_command,
+                                            'no shutdown',
+                                            'exit']
+    else:
+        interface_configuration_commands = [interface_command,
+                                            ip_address_command,
+                                            'no shutdown',
+                                            'exit']
+    device.send_config_set(interface_configuration_commands)
+    return 0
 
 
-def device_selection_menu():
+def interface_shutdown_mode(device: netmiko.cisco.cisco_ios.CiscoIosTelnet):
+    """
+    Set interface to 'no shutdown'
+    :param device: Device connection object
+    :return: 0 for success
+    """
+    print(script_messages.ConfigureInterfaceStrings.ASK_SHOW_INTERFACE_IP_CONFIGURATIONS)
+    answer = script_messages.ask_yes_or_not()
+    if answer == 'y':
+        show_interfaces(device)
+
+    # select interface
+    selected_interface = input(script_messages.GeneralConfiguration.ASK_INTERFACE)
+    interface_command = 'int {0}'.format(selected_interface)
+
+    interface_configuration_commands = [interface_command,
+                                        'no shutdown',
+                                        'exit']
+
+    device.send_config_set(interface_configuration_commands)
+    return 0
+
+
+def device_selection_menu(device_selection=0):
     """
     Let a user choose a device that was entered to the script
     :return: The device object the was chosen
     """
-    device_selection = 0
     device_verify = False
 
-    while not device_verify:
+    while (not device_verify) and (device_selection == 0):
         device_selection = input(script_messages.MainMenuStrings.IOU_OR_SWITCH)
         # Verify that the input is a number
         if is_number(device_selection):
@@ -214,6 +422,78 @@ def device_selection_menu():
         return SWITCH[device_number]
 
 
+def router_conf_menu():
+    num_verify = False
+    menu_selection = 0
+    while not num_verify:
+        menu_selection = input(script_messages.RouterMenuStrings.ROUTER_MENU)
+        num_verify = is_number(menu_selection)
+        if not num_verify:
+            print(script_messages.VALUE_NOT_A_NUMBER)
+
+    menu_selection = int(menu_selection)
+    if menu_selection == 0:
+        # Exit the router configuration menu
+        return True
+    elif menu_selection == 1:
+        # Configure an interface
+        selected_device = device_selection_menu(1)
+        configure_interface(selected_device)
+    elif menu_selection == 2:
+        # Configure router ospf
+        selected_device = device_selection_menu(1)
+        configure_ospf(selected_device)
+    elif menu_selection == 3:
+        #  Show current interfaces configuration
+        selected_device = device_selection_menu(1)
+        show_interfaces(selected_device)
+    elif menu_selection == 4:
+        # Show current ip routing table
+        selected_device = device_selection_menu(1)
+        show_ip_routing_table(selected_device)
+    elif menu_selection == 5:
+        # Turn on an interface
+        selected_device = device_selection_menu(1)
+        interface_shutdown_mode(selected_device)
+    return False
+
+
+def switch_conf_menu():
+    """
+    Switch configuration menu
+    :return: boolean value to determine if exit the menu or not
+    """
+    num_verify = False
+    menu_selection = 0
+    while not num_verify:
+        menu_selection = input(script_messages.SwitchMenuStrings.SWITCH_MENU)
+        num_verify = is_number(menu_selection)
+        if not num_verify:
+            print(script_messages.VALUE_NOT_A_NUMBER)
+
+    menu_selection = int(menu_selection)
+    if menu_selection == 0:
+        # Exit the switch configuration menu
+        return True
+    elif menu_selection == 1:
+        # Create a vlan
+        selected_device = device_selection_menu(2)
+        create_vlan(selected_device)
+    elif menu_selection == 2:
+        # Configure vlan interface settings
+        selected_device = device_selection_menu(2)
+        configure_vlan(selected_device)
+    elif menu_selection == 3:
+        # Show current vlan settings
+        selected_device = device_selection_menu(2)
+        show_vlan(selected_device)
+    elif menu_selection == 4:
+        # Show MAC table
+        selected_device = device_selection_menu(2)
+        show_mac_table(selected_device)
+    return False
+
+
 def main_menu():
     """
     Main menu function, let the user navigate in the script functions
@@ -239,9 +519,15 @@ def main_menu():
             add_device(True)
         elif auto_selection == 'n':
             add_device(False)
-    elif menu_selection == 500:
-        selected_device = device_selection_menu()
-        show_interface_running_conf(selected_device)
+    elif menu_selection == 2:
+        # Enter Switch Settings menu
+        exit_menu = False
+        while not exit_menu:
+            exit_menu = switch_conf_menu()
+    elif menu_selection == 3:
+        exit_menu = False
+        while not exit_menu:
+            exit_menu = router_conf_menu()
 
     return False
 
